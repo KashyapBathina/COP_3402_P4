@@ -1,9 +1,10 @@
-#ifndef _GEN_CODE_H
-#define _GEN_CODE_H
+#ifndef GEN_CODE_H
+#define GEN_CODE_H
 
-#include "code_seq.h"
 #include "ast.h"
+#include "code_seq.h"
 #include "bof.h"
+
 
 // Initialize the code generator
 void gen_code_initialize();
@@ -86,4 +87,4 @@ code_seq gen_code_number(int value);
 // Generate code for an identifier
 code_seq gen_code_ident(ident_t *id);
 
-#endif
+#endif // GEN_CODE_H
