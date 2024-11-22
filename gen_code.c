@@ -132,6 +132,30 @@ code_seq gen_code_stmts(stmts_t *stmts) {
     return ret;
 }
 
+// Generate code for a single statement
+code_seq gen_code_stmt(stmt_t *stmt) {
+    switch (stmt->stmt_kind) {
+        case assign_stmt:
+            return gen_code_assign_stmt(&(stmt->data.assign_stmt));
+        case call_stmt:
+            return gen_code_call_stmt(&(stmt->data.call_stmt));
+        case if_stmt:
+            return gen_code_if_stmt(&(stmt->data.if_stmt));
+        case while_stmt:
+            return gen_code_while_stmt(&(stmt->data.while_stmt));
+        case read_stmt:
+            return gen_code_read_stmt(&(stmt->data.read_stmt));
+        case print_stmt:
+            return gen_code_print_stmt(&(stmt->data.print_stmt));
+        case block_stmt:
+            return gen_code_block_stmt(&(stmt->data.block_stmt));
+        default:
+            bail_with_error("Unknown stmt_kind (%d) in gen_code_stmt!", stmt->stmt_kind);
+    }
+    return code_seq_empty(); // should never reach here
+}
+
+
 // Generate code for an assignment statement
 code_seq gen_code_assign_stmt(assign_stmt_t *stmt) {
     code_seq ret = gen_code_expr(stmt->expr);
@@ -176,6 +200,31 @@ code_seq gen_code_while_stmt(while_stmt_t *stmt) {
     return ret;
 }
 
+// Generate code for a read statement
+code_seq gen_code_read_stmt(read_stmt_t *stmt) {
+    code_seq ret = code_seq_singleton(code_rch(3, 0)); // Use $3 for V0
+    code_seq fp_seq = code_utils_compute_fp(4, stmt->idu->levelsOutward); // Use $4 for T9
+    code_seq_concat(&ret, fp_seq);
+    unsigned int offset_count = id_use_get_attrs(stmt->idu)->offset_count;
+    code_seq_add_to_end(&ret, code_swr(4, offset_count, 3)); // Use $4 for T9 and $3 for V0
+    return ret;
+}
+
+
+// Generate code for a print statement
+code_seq gen_code_print_stmt(print_stmt_t *stmt) {
+    code_seq ret = gen_code_expr(&(stmt->expr));
+    code_seq_concat(&ret, code_seq_singleton(code_lwr(5, SP, 0))); // Pop stack into $5
+    code_seq_add_to_end(&ret, code_pint(5, 0)); // Use $5 for A0
+    return ret;
+}
+
+// Generate code for a block statement
+code_seq gen_code_block_stmt(block_stmt_t *stmt) {
+    return gen_code_block(stmt->block);
+}
+
+
 // Generate code for expressions
 code_seq gen_code_expr(expr_t *expr) {
     switch (expr->expr_kind) {
@@ -201,6 +250,23 @@ code_seq gen_code_binary_op_expr(binary_op_expr_t *expr) {
     code_seq op_cs = gen_code_op(expr->arith_op);
     code_seq_concat(&left_cs, op_cs);
     return left_cs;
+}
+
+// Generate code for an operator
+code_seq gen_code_op(token_t op) {
+    switch (op.code) {
+        case plussym:
+            return code_seq_singleton(code_add(3, 0, 3, 0, 6, 0)); // Use $3 for V0 and $6 for AT
+        case minussym:
+            return code_seq_singleton(code_sub(3, 0, 3, 0, 6, 0)); // Use $3 for V0 and $6 for AT
+        case multsym:
+            return code_seq_singleton(code_mul(3, 0, 6, 0)); // Use $3 for V0 and $6 for AT
+        case divsym:
+            return code_seq_singleton(code_div(3, 0, 6, 0)); // Use $3 for V0 and $6 for AT
+        default:
+            bail_with_error("Unknown token code (%d) in gen_code_op", op.code);
+    }
+    return code_seq_empty(); // should never reach here
 }
 
 // Generate negated expressions

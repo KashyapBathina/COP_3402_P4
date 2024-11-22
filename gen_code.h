@@ -5,7 +5,6 @@
 #include "code_seq.h"
 #include "bof.h"
 
-
 // Initialize the code generator
 void gen_code_initialize();
 
