@@ -144,8 +144,3 @@ word_type literal_table_iteration_next() {
     iteration_next = iteration_next->next;
     return ret;
 }
-
-// Return the size (in words/entries) in the literal table
-unsigned int literal_table_size(void) {
-    return next_word_offset;
-}

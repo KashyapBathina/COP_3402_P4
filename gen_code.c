@@ -1,12 +1,16 @@
 #include "gen_code.h"
 #include "ast.h" // For block_t, stmt_t, expr_t, etc.
 #include "code_seq.h" // For code_seq and related operations
+#include "code_utils.h"
 #include "bof.h" // For BOFHeader and related functions
 #include "literal_table.h" // For managing literals
 #include "instruction.h" // For instruction-related functions
 #include "regname.h" // For register names
 #include "utilities.h" // For utility functions
 #include <string.h> // For memcpy
+#include "spl.tab.h"
+#include "code.h"
+
 
 #define STACK_SPACE 4096
 
@@ -15,33 +19,28 @@ void gen_code_initialize() {
     literal_table_initialize();
 }
 
+// Requires: bf if open for writing in binary
+// and prior to this scope checking and type checking have been done.
+// Write all the instructions in cs to bf in order
+static void gen_code_output_seq(BOFFILE bf, code_seq cs)
+{
+    while (!code_seq_is_empty(cs)) {
+      	bin_instr_t inst = code_seq_first(cs)->instr;
+      	instruction_write_bin_instr(bf, inst);
+      	cs = code_seq_rest(cs);
+    }
+}
+
 // Generate the BOF program header
 BOFHeader gen_code_program_header(code_seq main_cs) {
     BOFHeader ret;
-    memcpy(ret.magic, "BO32", 4); // Magic number for BOF files
+    bof_write_magic_to_header(&ret);
     ret.text_start_address = 0;
-    ret.text_length = code_seq_size(main_cs) * sizeof(bin_instr_t);
-    ret.data_start_address = (ret.text_length + 1023) & ~1023; // Align to 1024
-    ret.data_length = literal_table_size() * sizeof(word_type);
+    ret.text_length = code_seq_size(main_cs) * BYTES_PER_WORD;
+    ret.data_start_address = MAX(ret.text_length, 1024) + BYTES_PER_WORD;
+    ret.data_length = literal_table_size() * BYTES_PER_WORD;
     ret.stack_bottom_addr = ret.data_start_address + ret.data_length + STACK_SPACE;
     return ret;
-}
-
-// Output the program to a BOFFILE
-void gen_code_output_program(BOFFILE bf, code_seq main_cs) {
-    BOFHeader header = gen_code_program_header(main_cs);
-    bof_write_header(bf, header);
-    gen_code_output_seq(bf, main_cs);
-    gen_code_output_literals(bf);
-}
-
-// Output code sequences
-void gen_code_output_seq(BOFFILE bf, code_seq cs) {
-    while (!code_seq_is_empty(cs)) {
-        bin_instr_t instr = code_seq_first(cs)->instr;
-        instruction_write_bin_instr(bf, instr);
-        cs = code_seq_rest(cs);
-    }
 }
 
 // Output literals
@@ -54,9 +53,18 @@ void gen_code_output_literals(BOFFILE bf) {
     literal_table_end_iteration();
 }
 
+// Output the program to a BOFFILE
+void gen_code_output_program(BOFFILE bf, code_seq main_cs) {
+    BOFHeader header = gen_code_program_header(main_cs);
+    bof_write_header(bf, header);
+    gen_code_output_seq(bf, main_cs);
+    gen_code_output_literals(bf);
+}
+
 // Generate the entire program
 void gen_code_program(BOFFILE bf, block_t *prog) {
     code_seq main_cs = gen_code_block(prog);
+    code_seq_add_to_end(&main_cs, code_exit(0)); // Add EXIT instruction
     gen_code_output_program(bf, main_cs);
 }
 
@@ -90,6 +98,23 @@ code_seq gen_code_const_decl(const_decl_t *const_decl) {
         def = def->next;
     }
     return ret;
+}
+
+// Generate code for a list of constant definitions
+code_seq gen_code_const_def_list(const_def_list_t *const_def_list) {
+    code_seq ret = code_seq_empty();
+    const_def_t *def = const_def_list->start;
+    while (def != NULL) {
+        code_seq_concat(&ret, gen_code_const_def(def));
+        def = def->next;
+    }
+    return ret;
+}
+
+// Generate code for a single constant definition
+code_seq gen_code_const_def(const_def_t *const_def) {
+    unsigned int offset = literal_table_lookup(const_def->number.text, const_def->number.value);
+    return code_seq_singleton(code_lit(GP, offset, const_def->number.value));
 }
 
 // Generate code for variable declarations
@@ -132,6 +157,17 @@ code_seq gen_code_stmts(stmts_t *stmts) {
     return ret;
 }
 
+// Generate code for a list of statements
+code_seq gen_code_stmt_list(stmt_list_t *stmt_list) {
+    code_seq ret = code_seq_empty();
+    stmt_t *stmt = stmt_list->start;
+    while (stmt != NULL) {
+        code_seq_concat(&ret, gen_code_stmt(stmt));
+        stmt = stmt->next;
+    }
+    return ret;
+}
+
 // Generate code for a single statement
 code_seq gen_code_stmt(stmt_t *stmt) {
     switch (stmt->stmt_kind) {
@@ -155,7 +191,6 @@ code_seq gen_code_stmt(stmt_t *stmt) {
     return code_seq_empty(); // should never reach here
 }
 
-
 // Generate code for an assignment statement
 code_seq gen_code_assign_stmt(assign_stmt_t *stmt) {
     code_seq ret = gen_code_expr(stmt->expr);
@@ -173,10 +208,15 @@ code_seq gen_code_call_stmt(call_stmt_t *stmt) {
     return code_seq_empty();
 }
 
+// Generate code for a block statement
+code_seq gen_code_block_stmt(block_stmt_t *stmt) {
+    return gen_code_block(stmt->block);
+}
+
 // Generate code for an if statement
 code_seq gen_code_if_stmt(if_stmt_t *stmt) {
     code_seq ret = gen_code_condition(&(stmt->condition));
-    code_seq then_cs = gen_code_stmts(&(stmt->then_stmts));
+    code_seq then_cs = gen_code_stmts(stmt->then_stmts);
     code_seq else_cs = stmt->else_stmts ? gen_code_stmts(stmt->else_stmts) : code_seq_empty();
     unsigned int then_len = code_seq_size(then_cs);
     unsigned int else_len = code_seq_size(else_cs);
@@ -191,7 +231,7 @@ code_seq gen_code_if_stmt(if_stmt_t *stmt) {
 // Generate code for a while statement
 code_seq gen_code_while_stmt(while_stmt_t *stmt) {
     code_seq ret = gen_code_condition(&(stmt->condition));
-    code_seq body_cs = gen_code_stmts(&(stmt->body));
+    code_seq body_cs = gen_code_stmts(stmt->body);
     unsigned int body_len = code_seq_size(body_cs);
     code_seq_concat(&ret, code_seq_singleton(code_lwr(3, SP, 0)));
     code_seq_add_to_end(&ret, code_beq(3, 0, body_len + 1));
@@ -210,7 +250,6 @@ code_seq gen_code_read_stmt(read_stmt_t *stmt) {
     return ret;
 }
 
-
 // Generate code for a print statement
 code_seq gen_code_print_stmt(print_stmt_t *stmt) {
     code_seq ret = gen_code_expr(&(stmt->expr));
@@ -219,11 +258,55 @@ code_seq gen_code_print_stmt(print_stmt_t *stmt) {
     return ret;
 }
 
-// Generate code for a block statement
-code_seq gen_code_block_stmt(block_stmt_t *stmt) {
-    return gen_code_block(stmt->block);
+// Generate code for conditions
+code_seq gen_code_condition(condition_t *cond) {
+    switch (cond->cond_kind) {
+        case ck_db:
+            return gen_code_db_condition(&(cond->data.db_cond));
+        case ck_rel:
+            return gen_code_rel_op_condition(&(cond->data.rel_op_cond));
+        default:
+            bail_with_error("Unexpected condition_kind_e (%d)", cond->cond_kind);
+    }
+    return code_seq_empty(); // unreachable
 }
 
+// Generate code for db conditions
+code_seq gen_code_db_condition(db_condition_t *cond) {
+    code_seq ret = gen_code_expr(&(cond->dividend));
+    code_seq_concat(&ret, gen_code_expr(&(cond->divisor)));
+    code_seq_concat(&ret, code_seq_singleton(code_div(3, 0))); // Use $3 for V0
+    return ret;
+}
+
+// Generate code for relational operator conditions
+code_seq gen_code_rel_op_condition(rel_op_condition_t *cond) {
+    code_seq ret = gen_code_expr(&(cond->expr1));
+    code_seq_concat(&ret, gen_code_expr(&(cond->expr2)));
+    switch (cond->rel_op.code) {
+        case eqsym:
+            code_seq_concat(&ret, code_seq_singleton(code_beq(3, 0, 1))); // Use $3 for V0
+            break;
+        case neqsym:
+            code_seq_concat(&ret, code_seq_singleton(code_bne(3, 0, 1))); // Use $3 for V0
+            break;
+        case ltsym:
+            code_seq_concat(&ret, code_seq_singleton(code_bltz(3, 0, 1))); // Use $3 for V0
+            break;
+        case leqsym:
+            code_seq_concat(&ret, code_seq_singleton(code_blez(3, 0, 1))); // Use $3 for V0
+            break;
+        case gtsym:
+            code_seq_concat(&ret, code_seq_singleton(code_bgtz(3, 0, 1))); // Use $3 for V0
+            break;
+        case geqsym:
+            code_seq_concat(&ret, code_seq_singleton(code_bgez(3, 0, 1))); // Use $3 for V0
+            break;
+        default:
+            bail_with_error("Unknown relational operator (%d) in gen_code_rel_op_condition", cond->rel_op.code);
+    }
+    return ret;
+}
 
 // Generate code for expressions
 code_seq gen_code_expr(expr_t *expr) {
@@ -252,27 +335,10 @@ code_seq gen_code_binary_op_expr(binary_op_expr_t *expr) {
     return left_cs;
 }
 
-// Generate code for an operator
-code_seq gen_code_op(token_t op) {
-    switch (op.code) {
-        case plussym:
-            return code_seq_singleton(code_add(3, 0, 3, 0, 6, 0)); // Use $3 for V0 and $6 for AT
-        case minussym:
-            return code_seq_singleton(code_sub(3, 0, 3, 0, 6, 0)); // Use $3 for V0 and $6 for AT
-        case multsym:
-            return code_seq_singleton(code_mul(3, 0, 6, 0)); // Use $3 for V0 and $6 for AT
-        case divsym:
-            return code_seq_singleton(code_div(3, 0, 6, 0)); // Use $3 for V0 and $6 for AT
-        default:
-            bail_with_error("Unknown token code (%d) in gen_code_op", op.code);
-    }
-    return code_seq_empty(); // should never reach here
-}
-
 // Generate negated expressions
 code_seq gen_code_negated_expr(negated_expr_t *expr) {
     code_seq ret = gen_code_expr(expr->expr);
-    code_seq_concat(&ret, code_seq_singleton(code_neg(6, 0, 6, 0))); // Negate $6
+    code_seq_concat(&ret, code_seq_singleton(code_neg(3, 0, 3, 0))); // Negate $3
     return ret;
 }
 
@@ -291,4 +357,63 @@ code_seq gen_code_number(int value) {
     code_seq ret = code_seq_singleton(code_lit(3, 0, offset));
     code_seq_concat(&ret, code_seq_singleton(code_swr(SP, 0, 3)));
     return ret;
+}
+
+// Generate code for an operator
+code_seq gen_code_op(token_t op) {
+    switch (op.code) {
+        case plussym:
+        case minussym:
+        case multsym:
+        case divsym:
+            return gen_code_arith_op(op);
+        case eqsym:
+        case neqsym:
+        case ltsym:
+        case leqsym:
+        case gtsym:
+        case geqsym:
+            return gen_code_rel_op(op);
+        default:
+            bail_with_error("Unknown token code (%d) in gen_code_op", op.code);
+    }
+    return code_seq_empty(); // should never reach here
+}
+
+// Generate code for arithmetic operator
+code_seq gen_code_arith_op(token_t op) {
+    switch (op.code) {
+        case plussym:
+            return code_seq_singleton(code_add(3, 0, 3, 0)); // Use $3 for V0
+        case minussym:
+            return code_seq_singleton(code_sub(3, 0, 3, 0)); // Use $3 for V0
+        case multsym:
+            return code_seq_singleton(code_mul(3, 0)); // Use $3 for V0
+        case divsym:
+            return code_seq_singleton(code_div(3, 0)); // Use $3 for V0
+        default:
+            bail_with_error("Unknown arithmetic operator (%d) in gen_code_arith_op", op.code);
+    }
+    return code_seq_empty(); // should never reach here
+}
+
+// Generate code for relation operator
+code_seq gen_code_rel_op(token_t op) {
+    switch (op.code) {
+        case eqsym:
+            return code_seq_singleton(code_beq(3, 0, 1)); // Use $3 for V0
+        case neqsym:
+            return code_seq_singleton(code_bne(3, 0, 1)); // Use $3 for V0
+        case ltsym:
+            return code_seq_singleton(code_bltz(3, 0, 1)); // Use $3 for V0
+        case leqsym:
+            return code_seq_singleton(code_blez(3, 0, 1)); // Use $3 for V0
+        case gtsym:
+            return code_seq_singleton(code_bgtz(3, 0, 1)); // Use $3 for V0
+        case geqsym:
+            return code_seq_singleton(code_bgez(3, 0, 1)); // Use $3 for V0
+        default:
+            bail_with_error("Unknown relational operator (%d) in gen_code_rel_op", op.code);
+    }
+    return code_seq_empty(); // should never reach here
 }
