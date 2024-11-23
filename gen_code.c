@@ -59,11 +59,15 @@ void gen_code_output_program(BOFFILE bf, code_seq main_cs) {
     bof_write_header(bf, header);
     gen_code_output_seq(bf, main_cs);
     gen_code_output_literals(bf);
+    bof_close(bf);
 }
 
 // Generate the entire program
 void gen_code_program(BOFFILE bf, block_t *prog) {
-    code_seq main_cs = gen_code_block(prog);
+    //code_seq main_cs = gen_code_block(prog);
+    code_seq main_cs = code_seq_empty();
+    code_seq block_cs = gen_code_block(prog);
+    code_seq_concat(&main_cs, block_cs);
     code_seq_add_to_end(&main_cs, code_exit(0)); // Add EXIT instruction
     gen_code_output_program(bf, main_cs);
 }
@@ -71,8 +75,8 @@ void gen_code_program(BOFFILE bf, block_t *prog) {
 // Generate code for a block
 code_seq gen_code_block(block_t *block) {
     code_seq ret = code_seq_empty();
-    code_seq_concat(&ret, gen_code_const_decls(block->const_decls));
     code_seq_concat(&ret, gen_code_var_decls(block->var_decls));
+    code_seq_concat(&ret, gen_code_const_decls(block->const_decls));
     code_seq_concat(&ret, gen_code_stmts(&(block->stmts)));
     return ret;
 }
