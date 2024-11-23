@@ -22,8 +22,7 @@ void gen_code_initialize() {
 // Requires: bf if open for writing in binary
 // and prior to this scope checking and type checking have been done.
 // Write all the instructions in cs to bf in order
-static void gen_code_output_seq(BOFFILE bf, code_seq cs)
-{
+static void gen_code_output_seq(BOFFILE bf, code_seq cs) {
     while (!code_seq_is_empty(cs)) {
       	bin_instr_t inst = code_seq_first(cs)->instr;
       	instruction_write_bin_instr(bf, inst);
@@ -64,100 +63,196 @@ void gen_code_output_program(BOFFILE bf, code_seq main_cs) {
 
 // Generate the entire program
 void gen_code_program(BOFFILE bf, block_t *prog) {
-    //code_seq main_cs = gen_code_block(prog);
     code_seq main_cs = code_seq_empty();
+    code_seq_concat(&main_cs, code_utils_save_registers_for_AR());
     code_seq block_cs = gen_code_block(prog);
+    
+    
+    if (code_seq_is_empty(block_cs)) {
+        bail_with_error("Block code sequence is empty in gen_code_program------------------------------------------------------");
+    }
+    
+    
     code_seq_concat(&main_cs, block_cs);
-    code_seq_add_to_end(&main_cs, code_exit(0)); // Add EXIT instruction
+    
+    int vars_len_in_bytes = (code_seq_size(main_cs) / 2) * BYTES_PER_WORD;
+    code_seq_concat(&main_cs, code_utils_restore_registers_from_AR());
+    code_seq_concat(&main_cs, code_utils_deallocate_stack_space(vars_len_in_bytes));
+    code_seq_add_to_end(&main_cs, code_exit(0)); // Add EXIT instruction.
     gen_code_output_program(bf, main_cs);
 }
 
 // Generate code for a block
 code_seq gen_code_block(block_t *block) {
     code_seq ret = code_seq_empty();
+    /*
     code_seq_concat(&ret, gen_code_var_decls(block->var_decls));
+    
+    if (code_seq_is_empty(ret)) {
+        fprintf(stderr, "Warning: Variable declarations are empty in gen_code_block.\n");
+    }
+
     code_seq_concat(&ret, gen_code_const_decls(block->const_decls));
+    
+    if (code_seq_is_empty(ret)) {
+        fprintf(stderr, "Warning: Constant declarations are empty in gen_code_block.\n");
+    }
+    
     code_seq_concat(&ret, gen_code_stmts(&(block->stmts)));
+    
+    if (code_seq_is_empty(ret)) {
+        fprintf(stderr, "Warning: Statements declarations are empty in gen_code_block.\n");
+    }
+    */
+    
+    code_seq var_decls_cs = gen_code_var_decls(block->var_decls);
+    code_seq const_decls_cs = gen_code_const_decls(block->const_decls);
+    code_seq stmts_cs = gen_code_stmts(&(block->stmts));
+
+    if (code_seq_is_empty(var_decls_cs)) {
+        fprintf(stderr, "Warning: Variable declarations are empty in gen_code_block.\n");
+    }
+    if (code_seq_is_empty(const_decls_cs)) {
+        fprintf(stderr, "Warning: Constant declarations are empty in gen_code_block.\n");
+    }
+    if (code_seq_is_empty(stmts_cs)) {
+        fprintf(stderr, "Warning: Statement declarations are empty in gen_code_block.\n");
+    }
+
+    code_seq_concat(&ret, var_decls_cs);
+    code_seq_concat(&ret, const_decls_cs);
+    code_seq_concat(&ret, stmts_cs);
     return ret;
 }
 
 // Generate code for constant declarations
 code_seq gen_code_const_decls(const_decls_t const_decls) {
     code_seq ret = code_seq_empty();
-    const_decl_t *cd = const_decls.start;
-    while (cd != NULL) {
-        code_seq_concat(&ret, gen_code_const_decl(cd));
-        cd = cd->next;
+    const_decl_t *cd_listp = const_decls.start;
+
+    while (cd_listp != NULL) {
+        // Generate code for each constant declaration
+        code_seq const_decl_cs = gen_code_const_decl(*cd_listp);
+        code_seq_concat(&ret, const_decl_cs);
+        cd_listp = cd_listp->next;
     }
+
     return ret;
 }
 
 // Generate code for a single constant declaration
-code_seq gen_code_const_decl(const_decl_t *const_decl) {
+code_seq gen_code_const_decl(const_decl_t const_decl) {
     code_seq ret = code_seq_empty();
-    const_def_t *def = const_decl->const_def_list.start;
-    while (def != NULL) {
-        unsigned int offset = literal_table_lookup(def->number.text, def->number.value);
-        code_seq_add_to_end(&ret, code_lit(GP, offset, def->number.value));
-        def = def->next;
-    }
+
+    // Traverse the list of constant definitions
+    code_seq const_def_list_cs = gen_code_const_def_list(&(const_decl.const_def_list));
+    code_seq_concat(&ret, const_def_list_cs);
+
     return ret;
 }
 
 // Generate code for a list of constant definitions
 code_seq gen_code_const_def_list(const_def_list_t *const_def_list) {
     code_seq ret = code_seq_empty();
-    const_def_t *def = const_def_list->start;
-    while (def != NULL) {
-        code_seq_concat(&ret, gen_code_const_def(def));
-        def = def->next;
+    const_def_t *cdp = const_def_list->start;
+
+    while (cdp != NULL) {
+        // Generate code for each constant definition
+        code_seq const_def_cs = gen_code_const_def(*cdp);
+        code_seq_concat(&ret, const_def_cs);
+        cdp = cdp->next;
     }
+
     return ret;
 }
 
 // Generate code for a single constant definition
-code_seq gen_code_const_def(const_def_t *const_def) {
-    unsigned int offset = literal_table_lookup(const_def->number.text, const_def->number.value);
-    return code_seq_singleton(code_lit(GP, offset, const_def->number.value));
+code_seq gen_code_const_def(const_def_t const_def) {
+    unsigned int offset = literal_table_lookup(const_def.number.text, const_def.number.value);
+    return code_seq_singleton(code_swr(GP, offset, const_def.number.value)); // Store literal at GP+offset.
 }
+
 
 // Generate code for variable declarations
 code_seq gen_code_var_decls(var_decls_t var_decls) {
     code_seq ret = code_seq_empty();
-    var_decl_t *vd = var_decls.var_decls;
-    while (vd != NULL) {
-        code_seq_concat(&ret, gen_code_var_decl(vd));
-        vd = vd->next;
+    var_decl_t *vdp = var_decls.var_decls;
+
+    while (vdp != NULL) {
+        // Generate code for each variable declaration
+        code_seq var_decl_cs = gen_code_var_decl(*vdp);
+        
+        if (code_seq_is_empty(var_decl_cs)) {
+            fprintf(stderr, "00000000000000000000000000000000000000000000000000");
+        }
+        
+        code_seq_concat(&ret, var_decl_cs);
+        
+        if (code_seq_is_empty(ret)) {
+            fprintf(stderr, "Warning: 111111111111111111111111111111111111111111111111111111\n");
+        }  
+        
+        
+        vdp = vdp->next;
     }
+    
+    // ISSUE HERE FOR SOME REASON, empty ret code seq
+    if (code_seq_is_empty(ret)) {
+        fprintf(stderr, "Warning: 222222222222222222222222222222222222222222222222\n");
+    }
+        
     return ret;
 }
 
 // Generate code for a single variable declaration
-code_seq gen_code_var_decl(var_decl_t *vd) {
-    return gen_code_idents(&(vd->ident_list));
+code_seq gen_code_var_decl(var_decl_t var_decl) {
+    code_seq ret = gen_code_idents(&(var_decl.ident_list));
+    
+    if (code_seq_is_empty(ret)) {
+        fprintf(stderr, "3333333333333333333333333333333333333333333333\n");
+    }
+
+    return ret;
 }
 
 // Generate code for the identifiers in idents
 code_seq gen_code_idents(ident_list_t *idents) {
     code_seq ret = code_seq_empty();
     ident_t *idp = idents->start;
+
     while (idp != NULL) {
-        code_seq alloc_and_init = code_seq_singleton(code_sri(SP, 1));
-        code_seq_add_to_end(&alloc_and_init, code_lit(SP, 0, 0));
+        unsigned int offset = id_use_get_attrs(idp->idu)->offset_count;
+        // allocate space and initialize variable using GP and offset.
+        code_seq alloc_and_init = code_seq_singleton(code_sri(GP, offset));
+        code_seq_add_to_end(&alloc_and_init, code_lit(GP, offset, 0));
         code_seq_concat(&ret, alloc_and_init);
+        
+        if (code_seq_is_empty(ret)) {
+            fprintf(stderr, "444444444444444444444444444444444444444444444444444444\n");
+        }
+
         idp = idp->next;
+
     }
+    
+    if (code_seq_is_empty(ret)) {
+        fprintf(stderr, "55555555555555555555555555555555555555555555\n");
+    }
+
+
     return ret;
 }
 
 // Generate code for a list of statements
 code_seq gen_code_stmts(stmts_t *stmts) {
     code_seq ret = code_seq_empty();
-    stmt_t *sp = stmts->stmt_list.start;
-    while (sp != NULL) {
-        code_seq_concat(&ret, gen_code_stmt(sp));
-        sp = sp->next;
+
+    if (stmts->stmts_kind != empty_stmts_e) {
+        stmt_list_t stmt_list = stmts->stmt_list;
+        code_seq stmt_list_cs = gen_code_stmt_list(&stmt_list);
+        code_seq_concat(&ret, stmt_list_cs);
     }
+
     return ret;
 }
 
@@ -166,7 +261,8 @@ code_seq gen_code_stmt_list(stmt_list_t *stmt_list) {
     code_seq ret = code_seq_empty();
     stmt_t *stmt = stmt_list->start;
     while (stmt != NULL) {
-        code_seq_concat(&ret, gen_code_stmt(stmt));
+        code_seq stmt_cs = gen_code_stmt(stmt); 
+        code_seq_concat(&ret, stmt_cs);
         stmt = stmt->next;
     }
     return ret;
@@ -234,14 +330,18 @@ code_seq gen_code_if_stmt(if_stmt_t *stmt) {
 
 // Generate code for a while statement
 code_seq gen_code_while_stmt(while_stmt_t *stmt) {
-    code_seq ret = gen_code_condition(&(stmt->condition));
+    code_seq cond_cs = gen_code_condition(&(stmt->condition));
     code_seq body_cs = gen_code_stmts(stmt->body);
+
+    unsigned int cond_len = code_seq_size(cond_cs);
     unsigned int body_len = code_seq_size(body_cs);
-    code_seq_concat(&ret, code_seq_singleton(code_lwr(3, SP, 0)));
-    code_seq_add_to_end(&ret, code_beq(3, 0, body_len + 1));
-    code_seq_concat(&ret, body_cs);
-    code_seq_add_to_end(&ret, code_jrel(-(body_len + code_seq_size(ret) + 1)));
-    return ret;
+
+    code_seq_concat(&cond_cs, code_seq_singleton(code_lwr(3, SP, 0))); // Pop stack into $3.
+    code_seq_add_to_end(&cond_cs, code_beq(3, 0, body_len + 1)); // Skip body if false.
+
+    code_seq_concat(&cond_cs, body_cs);
+    code_seq_add_to_end(&cond_cs, code_jrel(-(cond_len + body_len + 1))); // Loop back to condition.
+    return cond_cs;
 }
 
 // Generate code for a read statement
@@ -359,7 +459,7 @@ code_seq gen_code_ident(ident_t *id) {
 code_seq gen_code_number(int value) {
     unsigned int offset = literal_table_lookup("", value);
     code_seq ret = code_seq_singleton(code_lit(3, 0, offset));
-    code_seq_concat(&ret, code_seq_singleton(code_swr(SP, 0, 3)));
+    code_seq_concat(&ret, code_seq_singleton(code_swr(GP, offset, 3))); // Store literal at GP+offset.
     return ret;
 }
 
