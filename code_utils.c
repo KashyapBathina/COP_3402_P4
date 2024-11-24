@@ -1,4 +1,4 @@
-// $Id: code_utils.c,v 1.11 2024/11/15 19:04:30 leavens Exp leavens $
+// $Id: code_utils.c,v 1.12 2024/11/18 22:03:45 leavens Exp leavens $
 #include <assert.h>
 #include "regname.h"
 #include "code.h"
@@ -11,14 +11,13 @@
 #define SAVED_STATIC_LINK_OFFSET (-3)
 #define SAVED_RA_OFFSET (-4)
 
-// Requires: t != SP && s != SP
+// Requires: t != SP && s != SP, if the VM has no CPR instruction
 // Return a code sequence that copies the value from register s
-// into register t, using the top of the stack as a temporary.
-// Modifies: t (and temporarily, SP)
+// into register t.
+// If the VM has no CPR instruction, then this uses
+// the top of the stack as a temporary and so modifies SP.
 code_seq code_utils_copy_regs(reg_num_type t, reg_num_type s)
 {
-    assert(t != SP);
-    assert(s != SP);
     code_seq ret = code_seq_singleton(code_cpr(t, s));
     // If the SSM didn't have the cpr instruction
     // one could use the top of the stack as a temporary, as follows
@@ -48,6 +47,7 @@ code_seq code_utils_load_static_link_into_reg(reg_num_type t,
 // frame pointer for the given number of scopes outward in register reg
 code_seq code_utils_compute_fp(reg_num_type reg, unsigned int levelsOut)
 {
+    // start in the current AR (so levelsOut == 0 addresses locals properly)
     assert(reg != FP && reg != RA);
     code_seq ret
 	= code_utils_copy_regs(reg, FP);
