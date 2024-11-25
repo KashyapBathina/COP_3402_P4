@@ -63,33 +63,39 @@ void gen_code_output_program(BOFFILE bf, code_seq main_cs) {
 
 // Generate the entire program
 void gen_code_program(BOFFILE bf, block_t prog) {
-    code_seq main_cs = code_utils_set_up_program();
-    code_seq_concat(&main_cs, gen_code_block(prog));
-    
-    //int vars_len_in_bytes = (code_seq_size(main_cs) / 2);
-    //code_seq_concat(&main_cs, code_utils_deallocate_stack_space(vars_len_in_bytes));
-    code_seq_concat(&main_cs, code_utils_tear_down_program());
+    code_seq main_cs = gen_code_block(prog); 
+    code_seq_concat(&main_cs, code_utils_tear_down_program()); // this function calls restore_registers inside and the add to end code_exit
     gen_code_output_program(bf, main_cs);
 }
 
 // Generate code for a block
 code_seq gen_code_block(block_t block) {
-    code_seq ret;
+    code_seq ret = code_seq_empty(); 
+    int total_stack_space = 0;
     
     if (block.var_decls.var_decls!=NULL) {
-        ret = gen_code_var_decls(block.var_decls);
+        code_seq var_decls_cs = gen_code_var_decls(block.var_decls);
+        int vars_len_in_bytes = code_seq_size(var_decls_cs);
+        total_stack_space += vars_len_in_bytes;
+        code_seq_concat(&ret, var_decls_cs);
     }
     
     if (block.const_decls.start!=NULL) {
         code_seq const_decls_cs = gen_code_const_decls(block.const_decls);
+        int const_len_in_bytes = code_seq_size(const_decls_cs);
+        total_stack_space += const_len_in_bytes;
         code_seq_concat(&ret, const_decls_cs);
     }
+    
+    code_seq_concat(&ret, code_utils_set_up_program()); // this function calls save registers inside
     
     if (block.stmts.stmts_kind!=empty_stmts_e) {
         code_seq stmts_cs = gen_code_stmts(block.stmts);
         code_seq_concat(&ret, stmts_cs);
     }
-
+    
+    if (total_stack_space>0) code_seq_concat(&ret, code_utils_deallocate_stack_space(total_stack_space/2)); 
+    
     return ret;
 }
 
@@ -152,9 +158,6 @@ code_seq gen_code_var_decls(var_decls_t var_decls) {
         code_seq_concat(&var_decl_cs, ret);
         vdp = vdp->next;
     }
-    
-    // ISSUE HERE FOR SOME REASON, empty ret code seq
-    if (code_seq_is_empty(ret)) {fprintf(stderr, "Warning: -2-2-2-2-2-2-2-2-2-2-2\n");}
         
     return ret;
 }
@@ -186,11 +189,9 @@ code_seq gen_code_idents(ident_list_t idents) {
 code_seq gen_code_stmts(stmts_t stmts) {
     code_seq ret = code_seq_empty();
 
-    if (stmts.stmts_kind != empty_stmts_e) {
-        stmt_list_t stmt_list = stmts.stmt_list;
-        code_seq stmt_list_cs = gen_code_stmt_list(stmt_list);
-        code_seq_concat(&ret, stmt_list_cs);
-    }
+    stmt_list_t stmt_list = stmts.stmt_list;
+    code_seq stmt_list_cs = gen_code_stmt_list(stmt_list);
+    code_seq_concat(&ret, stmt_list_cs);
 
     return ret;
 }
@@ -199,6 +200,7 @@ code_seq gen_code_stmts(stmts_t stmts) {
 code_seq gen_code_stmt_list(stmt_list_t stmt_list) {
     code_seq ret = code_seq_empty();
     stmt_t *stmt = stmt_list.start;
+    
     while (stmt != NULL) {
         code_seq stmt_cs = gen_code_stmt(*stmt); 
         code_seq_concat(&ret, stmt_cs);
@@ -295,9 +297,20 @@ code_seq gen_code_read_stmt(read_stmt_t stmt) {
 
 // Generate code for a print statement
 code_seq gen_code_print_stmt(print_stmt_t stmt) {
-    code_seq ret = gen_code_expr(stmt.expr);
-    code_seq_concat(&ret, code_seq_singleton(code_lwr(5, SP, 0))); // Pop stack into $5
-    code_seq_add_to_end(&ret, code_pint(5, 0)); // Use $5 for A0
+    code_seq ret = code_seq_empty(); // Initialize empty code sequence
+    code_seq expr_cs = gen_code_expr(stmt.expr); // Generate the code to evaluate the expression
+    code_seq_concat(&ret, expr_cs); // Concatenate the evaluated expression
+  
+
+    // Print the value from the stack
+    code_seq print_instr = code_seq_singleton(code_pint(SP, 0));
+    code_seq_concat(&ret, print_instr);
+
+    // Deallocate stack space (1 word)
+    code_seq dealloc_cs = code_utils_deallocate_stack_space(1);
+    code_seq_concat(&ret, dealloc_cs);
+
+
     return ret;
 }
 
@@ -359,7 +372,7 @@ code_seq gen_code_expr(expr_t expr) {
         case expr_ident:
             return gen_code_ident(expr.data.ident);
         case expr_number:
-            return gen_code_number(expr.data.number.value);
+            return gen_code_number(expr.data.number);
         case expr_negated:
             return gen_code_negated_expr(expr.data.negated);
         default:
@@ -395,10 +408,10 @@ code_seq gen_code_ident(ident_t id) {
 }
 
 // Generate code for number literals
-code_seq gen_code_number(int value) {
-    unsigned int offset = literal_table_lookup("", value);
-    code_seq ret = code_seq_singleton(code_lit(3, 0, offset));
-    code_seq_concat(&ret, code_seq_singleton(code_swr(GP, offset, 3))); // Store literal at GP+offset.
+code_seq gen_code_number(number_t number) {
+    unsigned int offset = literal_table_lookup(number.text, number.value); // Offset in the literal table
+    code_seq ret = code_utils_allocate_stack_space(1); // Allocate 1 word
+    code_seq_add_to_end(&ret, code_cpw(SP, 0, GP, offset)); // Copy literal value to stack
     return ret;
 }
 

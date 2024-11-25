@@ -1,0 +1,4 @@
+begin
+  print 340;  % prints 340
+  print 2     % prints 2
+end.

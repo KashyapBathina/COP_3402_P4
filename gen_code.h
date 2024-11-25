@@ -87,7 +87,7 @@ code_seq gen_code_negated_expr(negated_expr_t expr);
 code_seq gen_code_ident(ident_t id);
 
 // Generate code for number literals
-code_seq gen_code_number(int value);
+code_seq gen_code_number(number_t number);
 
 // Generate code for operators
 code_seq gen_code_op(token_t op);
