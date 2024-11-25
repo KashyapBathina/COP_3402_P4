@@ -1,1 +1,1 @@
-Cannot read header from hw4-gtestD.bof
+vm: machine.c:647: machine_okay: Assertion `GPR[SP] <= GPR[FP]' failed.

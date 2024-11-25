@@ -142,8 +142,12 @@ code_seq gen_code_const_def_list(const_def_list_t const_def_list) {
 
 // Generate code for a single constant definition
 code_seq gen_code_const_def(const_def_t const_def) {
-    unsigned int offset = literal_table_lookup(const_def.number.text, const_def.number.value);
-    return code_seq_singleton(code_swr(GP, offset, const_def.number.value)); // Store literal at GP+offset.
+    unsigned int offset = literal_table_lookup(const_def.number.text, const_def.number.value); // find offset
+    code_seq ret = code_utils_allocate_stack_space(1);
+    code_seq_add_to_end(&ret, code_cpw(SP, 0, GP, offset)); // Copy constant from literal table (GP + offset)
+
+    return ret;
+
 }
 
 
@@ -174,12 +178,16 @@ code_seq gen_code_idents(ident_list_t idents) {
     ident_t *idp = idents.start;
 
     while (idp != NULL) {
-        unsigned int offset = id_use_get_attrs(idp->idu)->offset_count;
-        // allocate space and initialize variable using GP and offset.
-        code_seq alloc_and_init = code_seq_singleton(code_addi(SP, offset, - BYTES_PER_WORD));
-        code_seq_add_to_end(&alloc_and_init, code_swr(SP, offset, 0));
-        code_seq_concat(&alloc_and_init, ret);
+        code_seq alloc_space = code_utils_allocate_stack_space(1);
+        code_seq_concat(&ret, alloc_space);
+
+        // Initialize the allocated space to 0
+        code_seq zero_init = code_seq_singleton(code_lit(SP, 0, 0)); // Load 0 into $sp+0
+        code_seq_add_to_end(&zero_init, code_swr(SP, 0, 3));        // Store 0 at SP + 0
+        code_seq_concat(&ret, zero_init);
+
         idp = idp->next;
+
     }
     
     return ret;
@@ -400,10 +408,20 @@ code_seq gen_code_negated_expr(negated_expr_t expr) {
 
 // Generate code for identifiers
 code_seq gen_code_ident(ident_t id) {
+    /*
     code_seq ret = code_utils_compute_fp(4, id.idu->levelsOutward);
     unsigned int offset_count = id_use_get_attrs(id.idu)->offset_count;
     code_seq_add_to_end(&ret, code_lwr(3, 4, offset_count));
     code_seq_concat(&ret, code_seq_singleton(code_swr(SP, 0, 3)));
+    return ret;
+    */
+    code_seq ret = code_utils_compute_fp(3, id.idu->levelsOutward); // Use $r3 for base FP
+
+    // Access the variable's value using its offset
+    unsigned int offset_count = id_use_get_attrs(id.idu)->offset_count;
+
+    // Push the variable's value onto the stack
+    code_seq_add_to_end(&ret, code_cpw(SP, 0, 3, offset_count)); // Copy variable's value to stack
     return ret;
 }
 
